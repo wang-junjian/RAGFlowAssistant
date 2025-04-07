@@ -1,5 +1,4 @@
 import streamlit as st
-import json
 import os
 import time
 import uuid
@@ -136,6 +135,43 @@ def generate_unique_name(prefix="Chat"):
     timestamp = int(time.time())
     return f"{prefix}_{timestamp}_{unique_id}"
 
+def format_reference(ref):
+    """将不同格式的引用转换为统一的字典格式"""
+    if isinstance(ref, dict):
+        return ref
+    else:
+        # 如果是对象，转换为字典
+        return {
+            "document_name": getattr(ref, "document_name", "未知文档"),
+            "similarity": getattr(ref, "similarity", 0.0),
+            "content": getattr(ref, "content", ""),
+            "document_id": getattr(ref, "document_id", "")
+        }
+
+def process_stream_response(session, prompt, message_placeholder):
+    """处理流式响应并返回完整响应和引用"""
+    try:
+        full_response = ""
+        response = None
+        
+        # 流式展示回答
+        for response in session.ask(prompt, stream=True):
+            new_content = response.content[len(full_response):]
+            full_response = response.content
+            message_placeholder.markdown(full_response + "▌")
+        
+        message_placeholder.markdown(full_response)
+        
+        # 处理引用
+        references = []
+        if hasattr(response, "reference") and response.reference:
+            references = [format_reference(ref) for ref in response.reference]
+        
+        return full_response, references
+    except Exception as e:
+        message_placeholder.error(f"获取回答时出错: {str(e)}")
+        return f"抱歉，处理您的问题时出现错误: {str(e)}", []
+
 def main_content(rag_object):
     """渲染主内容区域，展示聊天界面"""
     # 标题
@@ -192,35 +228,15 @@ def main_content(rag_object):
                     
                     # 使用流式响应
                     message_placeholder = st.empty()
-                    full_response = ""
                     
-                    # 流式展示回答
-                    for response in session.ask(prompt, stream=True):
-                        new_content = response.content[len(full_response):]
-                        full_response = response.content
-                        message_placeholder.markdown(full_response + "▌")
-                    
-                    message_placeholder.markdown(full_response)
+                    # 处理流式响应
+                    full_response, references = process_stream_response(
+                        session, prompt, message_placeholder
+                    )
                     
                     # 将助手响应添加到会话状态
                     assistant_message = {"role": "assistant", "content": full_response}
-                    
-                    # 处理引用：确保我们正确地处理引用对象
-                    if hasattr(response, "reference") and response.reference:
-                        # 转换引用为一致的字典格式
-                        references = []
-                        for ref in response.reference:
-                            if isinstance(ref, dict):
-                                references.append(ref)
-                            else:
-                                # 如果是对象，转换为字典
-                                ref_dict = {
-                                    "document_name": getattr(ref, "document_name", "未知文档"),
-                                    "similarity": getattr(ref, "similarity", 0.0),
-                                    "content": getattr(ref, "content", ""),
-                                    "document_id": getattr(ref, "document_id", "")
-                                }
-                                references.append(ref_dict)
+                    if references:
                         assistant_message["reference"] = references
                     
                     st.session_state.messages.append(assistant_message)
